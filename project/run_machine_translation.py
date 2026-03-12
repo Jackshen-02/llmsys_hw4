@@ -112,6 +112,7 @@ def collate_batch(
     between the source (weight = 0) and target (weight = 1) tokens for loss
     """
     token_ids, tgt_token_mask = [], []
+    max_length = model_max_length
     pad_token_id = tokenizer.vocab['<pad>']
     for example in examples:
         # token_ids_src = <de_token_ids> + <de_eos_id>
@@ -122,10 +123,29 @@ def collate_batch(
             f'{example[tgt_key]}<eos_{tgt_key}>')['input_ids']
 
         # COPY FROM ASSIGN2_5
-        raise NotImplementedError("Collate Function Not Implemented Yet")
+        example_token_ids = token_ids_src + token_ids_tgt
+        example_tgt_token_mask = (
+                [0] * len(token_ids_src) + [1] * len(token_ids_tgt))
+        example_token_ids = example_token_ids[:max_length]
+        example_tgt_token_mask = example_tgt_token_mask[:max_length]
+        pad_ids = [pad_token_id] * (max_length - len(example_token_ids))
+
+        token_ids.append(example_token_ids + pad_ids)
+        tgt_token_mask.append(example_tgt_token_mask + [0] * len(pad_ids))
+        # raise NotImplementedError("Collate Function Not Implemented Yet")
 
     # COPY FROM ASSIGN2_5
-    raise NotImplementedError("Collate Function Not Implemented Yet")
+    token_ids = np.array(token_ids)
+    tgt_token_mask = np.array(tgt_token_mask)
+
+    input_ids = token_ids[:, :-1]
+    labels    = token_ids[:, 1:]
+    label_token_weights = tgt_token_mask[:, 1:]
+
+    input_ids = minitorch.tensor_from_numpy(input_ids, backend=backend)
+    labels    = minitorch.tensor_from_numpy(labels, backend=backend)
+    label_token_weights = minitorch.tensor_from_numpy(label_token_weights, backend=backend)
+    # raise NotImplementedError("Collate Function Not Implemented Yet")
 
     return {
         'input_ids': minitorch.zeros((len(examples), model_max_length)),
@@ -153,7 +173,21 @@ def loss_fn(batch, model):
     batch_size, seq_len, vocab_size = logits.shape
     
     # COPY FROM ASSIGN2_5
-    raise NotImplementedError("Loss Function Not Implemented Yet")
+    logits = logits.view(batch_size * seq_len, vocab_size)
+    targets = batch['labels'].view(batch_size * seq_len)
+    label_token_weights = batch['label_token_weights'].view(batch_size * seq_len)
+
+    targets.requires_grad_(True)
+    # print("start calculating loss")
+    # import pdb
+    # pdb.set_trace()
+    loss = minitorch.nn.softmax_loss(
+        logits=logits,
+        target=targets
+    )
+
+    return ((loss * label_token_weights).sum() / label_token_weights.sum())
+    # raise NotImplementedError("Loss Function Not Implemented Yet")
 
 
 def train(model, optimizer, examples, n_samples, collate_fn, batch_size, desc):
