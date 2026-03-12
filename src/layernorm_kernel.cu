@@ -45,18 +45,56 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   // 3. Compute layernorm result with reinterpret_cast by casting to float4 for speedup
   
   // Step 1
-  float l_sum = 0;
+  float l_sum = 0.f;
+  float l_square_sum = 0.f;
   const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;  
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
     float4 val = inp_f4[idx];
     l_sum += val.x + val.y + val.z + val.w;
+    l_square_sum += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
   }
 
   // Step 2
+  float reduce_val[2] = {l_sum, l_square_sum};
+  blockReduce<ReduceType::kSum, 2>(reduce_val);
+
+  __shared__ float s_mean;
+  __shared__ float s_var;
+
+  if (threadIdx.x == 0) {
+    float inv_hidden = __fdividef(1.0f, (float)(hidden_size * 4));
+    s_mean = reduce_val[0] * inv_hidden;
+    s_var = reduce_val[1] * inv_hidden - s_mean * s_mean + LN_EPSILON;
+
+    vars[blockIdx.x] = (T)s_var;
+    if (means != nullptr) {
+      means[blockIdx.x] = (T)s_mean;
+    }
+  }
+  __syncthreads();
 
   // Step 3
+  float inv_std = rsqrtf(s_var);
+  float4 *ln_res_f4 =
+      reinterpret_cast<float4 *>(ln_res) + blockIdx.x * hidden_size;
+  const float4 *scale_f4 = reinterpret_cast<const float4 *>(scale);
+  const float4 *bias_f4 = reinterpret_cast<const float4 *>(bias);
+
+  for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
+    float4 in_val = inp_f4[idx];
+    float4 gamma_val = scale_f4[idx];
+    float4 beta_val = bias_f4[idx];
+    float4 out_val;
+
+    out_val.x = gamma_val.x * ((in_val.x - s_mean) * inv_std) + beta_val.x;
+    out_val.y = gamma_val.y * ((in_val.y - s_mean) * inv_std) + beta_val.y;
+    out_val.z = gamma_val.z * ((in_val.z - s_mean) * inv_std) + beta_val.z;
+    out_val.w = gamma_val.w * ((in_val.w - s_mean) * inv_std) + beta_val.w;
+
+    ln_res_f4[idx] = out_val;
+  }
   
-  assert(false && "Not Implemented");
+  // assert(false && "Not Implemented");
   /// END ASSIGN4_2_1
 }
 
