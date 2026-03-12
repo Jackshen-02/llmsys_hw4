@@ -374,11 +374,11 @@ class CudaKernelOps(TensorOps):
 
     @staticmethod
     def attn_softmax_fw(inp: Tensor, mask: Tensor):
-      batch_size, nhead, from_len, to_len = inp.shape
-      is_dec_self_attn = False
-      stream = torch.cuda.current_stream().cuda_stream
+        batch_size, nhead, from_len, to_len = inp.shape
+        is_dec_self_attn = False
+        stream = torch.cuda.current_stream().cuda_stream
 
-      lib_softmax.launch_attn_softmax.argtypes = [
+        lib_softmax.launch_attn_softmax.argtypes = [
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
         ctypes.c_int,
@@ -387,10 +387,10 @@ class CudaKernelOps(TensorOps):
         ctypes.c_int,
         ctypes.c_bool,
         ctypes.c_void_p
-      ]
-      lib_softmax.launch_attn_softmax.restype = None
+        ]
+        lib_softmax.launch_attn_softmax.restype = None
 
-      lib_softmax.launch_attn_softmax(
+        lib_softmax.launch_attn_softmax(
         inp._tensor._storage,
         mask._tensor._storage,
         batch_size,
@@ -399,14 +399,35 @@ class CudaKernelOps(TensorOps):
         to_len,
         is_dec_self_attn,
         stream
-      ) 
+        ) 
 
-      return inp
+        return inp
 
     @staticmethod
     def attn_softmax_bw(out_grad: Tensor, soft_inp: Tensor):
       #   BEGIN ASSIGN4_1_2
-      raise("Not implemented")
+        rows = int(np.prod(out_grad.shape[:-1]))
+        softmax_len = out_grad.shape[-1]
+        stream_1 = torch.cuda.current_stream().cuda_stream
+
+        lib_softmax.launch_attn_softmax_bw.argtypes = [
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p
+        ]
+        lib_softmax.launch_attn_softmax_bw.restype = None
+
+        lib_softmax.launch_attn_softmax_bw(
+        out_grad._tensor._storage,
+        soft_inp._tensor._storage,
+        rows,
+        softmax_len,
+        stream_1
+        )
+
+        return out_grad
       #   END ASSIGN4_1_2
 
     @staticmethod
