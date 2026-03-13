@@ -481,10 +481,13 @@ class CudaKernelOps(TensorOps):
         gamma_grad = gamma.zeros(gamma.shape)
         beta_grad = beta.zeros(beta.shape)
 
-        stream_obj_1 = torch.cuda.current_stream()
-        stream_1 = stream_obj_1.cuda_stream
-        stream_obj_2 = torch.cuda.Stream()
-        stream_2 = stream_obj_2.cuda_stream
+        # stream_obj_1 = torch.cuda.current_stream()
+        # stream_1 = stream_obj_1.cuda_stream
+        # stream_obj_2 = torch.cuda.Stream()
+        # stream_2 = stream_obj_2.cuda_stream
+
+        stream_1 = torch.cuda.current_stream().cuda_stream
+        stream_2 = stream_1
 
         lib_layernorm.launch_layernorm_bw.argtypes = [
             np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
