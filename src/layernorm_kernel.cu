@@ -215,15 +215,49 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   cg::thread_block b = cg::this_thread_block();
   cg::thread_block_tile<TILE_DIM> g = cg::tiled_partition<TILE_DIM>(b);
 
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
+  float l_betta = 0.f;
+  float l_gamma = 0.f;
+
   // Step 1
+  if (col < width) {
+    for (int row = threadIdx.y; row < rows; row += blockDim.y) {
+      int idx = row * width + col;
+      float dy = (float)out_grad[idx];
+      float xhat;
+
+      if (means != nullptr) {
+        xhat = ((float)inp[idx] - (float)means[row]) * rsqrtf((float)vars[row]);
+      } else {
+        xhat = ((float)inp[idx] - (float)betta[col]) / (float)gamma[col];
+      }
+
+      l_betta += dy;
+      l_gamma += dy * xhat;
+    }
+  }
 
   // Step 2
+  betta_buffer[threadIdx.y][threadIdx.x] = l_betta;
+  gamma_buffer[threadIdx.y][threadIdx.x] = l_gamma;
+  __syncthreads();
   
   // Step 3
+  l_betta = betta_buffer[threadIdx.x][threadIdx.y];
+  l_gamma = gamma_buffer[threadIdx.x][threadIdx.y];
+
+  for (int offset = TILE_DIM / 2; offset > 0; offset >>= 1) {
+    l_betta += g.shfl_down(l_betta, offset);
+    l_gamma += g.shfl_down(l_gamma, offset);
+  }
   
   // Step 4
+  int out_col = blockIdx.x * blockDim.x + threadIdx.y;
+  if (threadIdx.x == 0 && out_col < width) {
+    betta_grad[out_col] = (T)l_betta;
+    gamma_grad[out_col] = (T)l_gamma;
+  }
 
-  assert(false && "Not Implemented");
   /// END ASSIGN4_2_2
 }
 
@@ -270,15 +304,109 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 3. Compute reduce sum for dxhat and dxhat*xhat with blockReduce
   // 4. Compute final gradient
   
+  int row = blockIdx.x;
+  float reduce_val[2] = {0.f, 0.f};
+
+  const float4 *out_grad_f4 =
+      reinterpret_cast<const float4 *>(out_grad) + row * hidden_dim;
+  const float4 *inp_f4 =
+      reinterpret_cast<const float4 *>(inp) + row * hidden_dim;
+  const float4 *gamma_f4 = reinterpret_cast<const float4 *>(gamma);
+  const float4 *betta_f4 = reinterpret_cast<const float4 *>(betta);
+  float4 *inp_grad_f4 =
+      reinterpret_cast<float4 *>(inp_grad) + row * hidden_dim;
+
+  float inv_std = rsqrtf((float)vars[row]);
+  float mean = means != nullptr ? (float)means[row] : 0.f;
+  float inv_hidden = __fdividef(1.0f, (float)(hidden_dim * 4));
+  
   // Step 1
- 
+  for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
+    float4 dy = out_grad_f4[idx];
+    float4 g = gamma_f4[idx];
+    float4 x = inp_f4[idx];
+    float4 b = betta_f4[idx];
+
+    float4 dxhat;
+    dxhat.x = dy.x * g.x;
+    dxhat.y = dy.y * g.y;
+    dxhat.z = dy.z * g.z;
+    dxhat.w = dy.w * g.w;
+
   // Step 2
+    float4 xhat;
+    if (means != nullptr) {
+      xhat.x = (x.x - mean) * inv_std;
+      xhat.y = (x.y - mean) * inv_std;
+      xhat.z = (x.z - mean) * inv_std;
+      xhat.w = (x.w - mean) * inv_std;
+    } else {
+      xhat.x = (x.x - b.x) / g.x;
+      xhat.y = (x.y - b.y) / g.y;
+      xhat.z = (x.z - b.z) / g.z;
+      xhat.w = (x.w - b.w) / g.w;
+    }
+
+    reduce_val[0] += dxhat.x + dxhat.y + dxhat.z + dxhat.w;
+    reduce_val[1] += dxhat.x * xhat.x + dxhat.y * xhat.y +
+                     dxhat.z * xhat.z + dxhat.w * xhat.w;
+  }
    
   // Step 3
+  blockReduce<ReduceType::kSum, 2>(reduce_val);
+
+  __shared__ float s_sum_dxhat;
+  __shared__ float s_sum_dxhat_xhat;
+
+  if (threadIdx.x == 0) {
+    s_sum_dxhat = reduce_val[0];
+    s_sum_dxhat_xhat = reduce_val[1];
+  }
+  __syncthreads();
  
   // Step 4
+  for (int idx = threadIdx.x; idx < hidden_dim; idx += blockDim.x) {
+    float4 dy = out_grad_f4[idx];
+    float4 g = gamma_f4[idx];
+    float4 x = inp_f4[idx];
+    float4 b = betta_f4[idx];
+
+    float4 dxhat;
+    dxhat.x = dy.x * g.x;
+    dxhat.y = dy.y * g.y;
+    dxhat.z = dy.z * g.z;
+    dxhat.w = dy.w * g.w;
+
+    float4 xhat;
+    if (means != nullptr) {
+      xhat.x = (x.x - mean) * inv_std;
+      xhat.y = (x.y - mean) * inv_std;
+      xhat.z = (x.z - mean) * inv_std;
+      xhat.w = (x.w - mean) * inv_std;
+    } else {
+      xhat.x = (x.x - b.x) / g.x;
+      xhat.y = (x.y - b.y) / g.y;
+      xhat.z = (x.z - b.z) / g.z;
+      xhat.w = (x.w - b.w) / g.w;
+    }
+
+    float4 out_val;
+    out_val.x =
+        (dxhat.x - (s_sum_dxhat + xhat.x * s_sum_dxhat_xhat) * inv_hidden) *
+        inv_std;
+    out_val.y =
+        (dxhat.y - (s_sum_dxhat + xhat.y * s_sum_dxhat_xhat) * inv_hidden) *
+        inv_std;
+    out_val.z =
+        (dxhat.z - (s_sum_dxhat + xhat.z * s_sum_dxhat_xhat) * inv_hidden) *
+        inv_std;
+    out_val.w =
+        (dxhat.w - (s_sum_dxhat + xhat.w * s_sum_dxhat_xhat) * inv_hidden) *
+        inv_std;
+
+    inp_grad_f4[idx] = out_val;
+  }
   
-  assert(false && "Not Implemented");
   /// END ASSIGN4_2_2
 }
 extern "C" {
