@@ -303,4 +303,5 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
 
 
 if __name__ == '__main__':
-    fire.Fire(main)
+    # fire.Fire(main)
+    main()
