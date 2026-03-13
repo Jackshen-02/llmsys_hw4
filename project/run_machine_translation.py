@@ -148,10 +148,16 @@ def collate_batch(
     # raise NotImplementedError("Collate Function Not Implemented Yet")
 
     return {
-        'input_ids': minitorch.zeros((len(examples), model_max_length)),
-        'labels': minitorch.zeros((len(examples), model_max_length)),
-        'label_token_weights': minitorch.zeros((len(examples), model_max_length))
+        'input_ids': input_ids,
+        'labels': labels,
+        'label_token_weights': label_token_weights
     }
+
+    # return {
+    #     'input_ids': minitorch.zeros((len(examples), model_max_length)),
+    #     'labels': minitorch.zeros((len(examples), model_max_length)),
+    #     'label_token_weights': minitorch.zeros((len(examples), model_max_length))
+    # }
 
 
 def loss_fn(batch, model):
