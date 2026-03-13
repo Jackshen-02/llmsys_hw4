@@ -373,33 +373,37 @@ class CudaKernelOps(TensorOps):
         return out
 
     @staticmethod
-    def attn_softmax_fw(inp: Tensor, mask: Tensor):
+    def attn_softmax_fw(inp: Tensor, mask: Optional[Tensor] = None):
         batch_size, nhead, from_len, to_len = inp.shape
-        is_dec_self_attn = False
+        mask_future = mask is None
         stream = torch.cuda.current_stream().cuda_stream
 
         lib_softmax.launch_attn_softmax.argtypes = [
-        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
-        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_bool,
-        ctypes.c_void_p
+            np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_bool,
+            ctypes.c_void_p
         ]
         lib_softmax.launch_attn_softmax.restype = None
 
+        mask_ptr = None
+        if mask is not None:
+            mask_ptr = ctypes.c_void_p(mask._tensor._storage.ctypes.data)
+
         lib_softmax.launch_attn_softmax(
-        inp._tensor._storage,
-        mask._tensor._storage,
-        batch_size,
-        nhead,
-        from_len,
-        to_len,
-        is_dec_self_attn,
-        stream
-        ) 
+            inp._tensor._storage,
+            mask_ptr,
+            batch_size,
+            nhead,
+            from_len,
+            to_len,
+            mask_future,
+            stream
+        )
 
         return inp
 

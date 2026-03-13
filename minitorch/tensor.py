@@ -420,8 +420,13 @@ class Tensor:
         """
         self.grad = None
 
-    def attn_softmax(self, mask: Tensor) -> Tensor:
-      return Attn_Softmax.apply(self, mask)
+    # def attn_softmax(self, mask: Tensor) -> Tensor:
+    #   return Attn_Softmax.apply(self, mask)
+    
+    def attn_softmax(self, mask: Optional[Tensor] = None) -> Tensor:
+        if mask is None:
+            return Attn_Softmax.apply(self)
+        return Attn_Softmax.apply(self, mask)
 
     def layernorm(self, gamma: Tensor, beta: Tensor) -> Tensor:
       return LayerNorm.apply(self, gamma, beta)

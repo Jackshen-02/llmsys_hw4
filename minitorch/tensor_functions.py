@@ -386,8 +386,9 @@ class MatMul(Function):
 
 class Attn_Softmax(Function):
     @staticmethod
-    def forward(ctx: Context, inp: Tensor, mask: Tensor) -> Tensor:
+    def forward(ctx: Context, inp: Tensor, mask: Tensor = None) -> Tensor:
       #   BEGIN ASSIGN4_1_1
+        ctx.has_mask = mask is not None
         out = inp.f.attn_softmax_fw(inp, mask)
         ctx.save_for_backward(out)
         return out
@@ -398,7 +399,9 @@ class Attn_Softmax(Function):
       #   BEGIN ASSIGN4_1_2
         (soft_out,) = ctx.saved_values
         inp_grad = out_grad.f.attn_softmax_bw(out_grad, soft_out)
-        return inp_grad, 0.0
+        if getattr(ctx, "has_mask", False):
+            return inp_grad, 0.0
+        return inp_grad
       #   END ASSIGN4_1_2
 
 

@@ -233,12 +233,14 @@ void launch_attn_softmax(float *inp, const float *attn_mask,
   int inp_size = batch_size * nhead * from_len * to_len * float_size;
   int attn_mask_size = batch_size * to_len * float_size;
 
-  float *d_inp, *d_attn_mask;
+  float *d_inp, *d_attn_mask = nullptr;
   cudaMalloc((void **)&d_inp, inp_size);
-  cudaMalloc((void **)&d_attn_mask, attn_mask_size);
-
   cudaMemcpy(d_inp, inp, inp_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_attn_mask, attn_mask, attn_mask_size, cudaMemcpyHostToDevice);
+
+  if (attn_mask != nullptr) {
+    cudaMalloc((void **)&d_attn_mask, attn_mask_size);
+    cudaMemcpy(d_attn_mask, attn_mask, attn_mask_size, cudaMemcpyHostToDevice);
+  }
 
   dim3 grid_dim(1, batch_size, nhead);
   if (to_len <= 32) {
@@ -281,7 +283,9 @@ void launch_attn_softmax(float *inp, const float *attn_mask,
 
   // Free memory on device
   cudaFree(d_inp);
-  cudaFree(d_attn_mask);
+  if (d_attn_mask != nullptr) {
+    cudaFree(d_attn_mask);
+  }
 
 }}
 
@@ -404,7 +408,7 @@ void launch_attn_softmax_bw(float *out_grad,
   // Free memory on device
   cudaFree(d_out_grad);
   cudaFree(d_soft_outp);
-  
+
   // END ASSIGN4_1_2
 
 }}

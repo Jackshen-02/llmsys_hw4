@@ -50,6 +50,7 @@ class MultiHeadAttention(Module):
         self.v_projection = Linear(n_embd, n_embd, bias=bias, backend=backend)
         self.out_projection = Linear(n_embd, n_embd, bias=bias, backend=backend)
         self.dropout = Dropout(p_dropout)
+        self.use_fused_kernel = use_fused_kernel
 
     def create_causal_mask(self, bs, nh, seq_len):
         """
@@ -101,23 +102,24 @@ class MultiHeadAttention(Module):
         _, _, _, v_dim = v.shape
         assert q_dim == k_dim == v_dim
         result = None
-        
+        scores = (q @ kT) / np.sqrt(q_dim)
+
         if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
-            scores = (q @ kT) / np.sqrt(q_dim)
             if self.causal:
-                scores = scores + self.create_causal_mask(queries_len)
-            
+                scores = scores + self.create_causal_mask(batch_size, num_head, queries_len)
             attn = softmax(scores, dim=3)
-            attn = self.dropout(attn)
-
-            out = attn @ v
-            result = out.permute(0, 2, 1, 3).contiguous().view(batch_size, queries_len, num_head * q_dim)
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            if self.causal:
+                attn = scores.attn_softmax()
+            else:
+                attn = softmax(scores, dim=3)
             # END ASSIGN3_3
-
+        
+        attn = self.dropout(attn)
+        out = attn @ v
+        result = out.permute(0, 2, 1, 3).contiguous().view(batch_size, queries_len, num_head * q_dim)
         return result
 
     def forward(self, x):
@@ -197,20 +199,19 @@ class TransformerLayer(Module):
         # COPY FROM ASSIGN2_4
         # self.attention
         # self.ff
-        self.attention = MultiHeadAttention(n_embd=n_embd, n_head=n_head, causal=True, p_dropout=p_dropout, bias=bias, backend=backend)
+        self.attention = MultiHeadAttention(n_embd=n_embd, n_head=n_head, causal=True, p_dropout=p_dropout, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
         self.ff = FeedForward(n_embd=n_embd, p_dropout=p_dropout, bias=bias, backend=backend)
-
+        self.ln_1 = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
+        self.ln_2 = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
         self.use_fused_kernel = use_fused_kernel
-        if not self.use_fused_kernel:
+
+        # if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
             # self.ln_1
             # self.ln_2
-            self.ln_1 = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
-            self.ln_2 = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
             
-        else:
+        # else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
             # END ASSIGN3_3
 
     def forward(self, x):
@@ -229,7 +230,17 @@ class TransformerLayer(Module):
             x = x + self.ff(x_ln)
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            x_ln = x.view(batch_size * seq_len, x_dim).layernorm(
+                self.ln_1.weights.value,
+                self.ln_1.bias.value,
+            ).view(batch_size, seq_len, x_dim)
+            x = x + self.attention(x_ln)
+
+            x_ln = x.view(batch_size * seq_len, x_dim).layernorm(
+                self.ln_2.weights.value,
+                self.ln_2.bias.value,
+            ).view(batch_size, seq_len, x_dim)
+            x = x + self.ff(x_ln)
             # END ASSIGN3_3
 
         return x
@@ -278,21 +289,20 @@ class DecoderLM(Module):
         # COPY FROM ASSIGN2_4
         self.token_embeddings = Embedding(num_embeddings=n_vocab, embedding_dim=n_embd, backend=backend)
         self.position_embeddings = Embedding(num_embeddings=n_positions, embedding_dim=n_embd, backend=backend)
-        self.t_layer_1 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend)
-        self.t_layer_2 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend)
-        self.t_layer_3 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend)
-        self.t_layer_4 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend)
+        self.t_layer_1 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
+        self.t_layer_2 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
+        self.t_layer_3 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
+        self.t_layer_4 = TransformerLayer(n_embd=n_embd, n_head=n_head, p_dropout=p_dropout, ln_eps=ln_eps, bias=bias, backend=backend, use_fused_kernel=use_fused_kernel)
         self.dropout = Dropout(p_dropout=p_dropout)
-        # self.ln = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
+        self.ln = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
         self.lm_head = Linear(in_size=n_embd, out_size=n_vocab, bias=bias, backend=backend)
 
         self.use_fused_kernel = use_fused_kernel
-        if not self.use_fused_kernel:
+        # if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
-            self.ln = LayerNorm1d(dim=n_embd, eps=ln_eps, backend=backend)
-        else:
+        # else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            # raise NotImplementedError
             # END ASSIGN3_3
         
     def forward(self, idx):
@@ -307,22 +317,24 @@ class DecoderLM(Module):
         batch_size, seq_len = idx.shape
         pos = tensor([i for i in range(seq_len)], backend=self.backend).view(1, seq_len)
 
+        token_emb = self.token_embeddings(idx)
+        pos_emb = self.position_embeddings(pos)
+        x = token_emb + pos_emb
+        x = self.dropout(x)
+        x = self.t_layer_1(x)
+        x = self.t_layer_2(x)
+        x = self.t_layer_3(x)
+        x = self.t_layer_4(x)
+
         if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
-            token_emb = self.token_embeddings(idx)
-            # pos_ids = tensor_from_numpy(np.arange(seq_len).reshape(1, seq_len), backend=self.backend)
-            pos_emb = self.position_embeddings(pos)
-            x = token_emb + pos_emb
-            x = self.dropout(x)
-            x = self.t_layer_1(x)
-            x = self.t_layer_2(x)
-            x = self.t_layer_3(x)
-            x = self.t_layer_4(x)
             x = self.ln(x.view(batch_size * seq_len, self.n_embd)).view(batch_size, seq_len, self.n_embd)
-            logits = self.lm_head(x.view(batch_size * seq_len, self.n_embd)).view(batch_size, seq_len, self.n_vocab)
+            
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            x = x.view(batch_size * seq_len, self.n_embd).layernorm(self.ln.weights.value, self.ln.bias.value).view(batch_size, seq_len, self.n_embd)
             # END ASSIGN3_3
 
-        return x
+        logits = self.lm_head(x.view(batch_size * seq_len, self.n_embd)).view(batch_size, seq_len, self.n_vocab)
+        # return x
+        return logits
