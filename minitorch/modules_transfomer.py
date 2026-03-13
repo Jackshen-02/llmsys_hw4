@@ -111,10 +111,13 @@ class MultiHeadAttention(Module):
             attn = softmax(scores, dim=3)
         else:
             # BEGIN ASSIGN3_3
+            # if self.causal:
+            #     attn = scores.attn_softmax()
+            # else:
+            #     attn = softmax(scores, dim=3)
             if self.causal:
-                attn = scores.attn_softmax()
-            else:
-                attn = softmax(scores, dim=3)
+                scores = scores + self.create_causal_mask(batch_size, num_head, queries_len)
+            attn = softmax(scores, dim=3)
             # END ASSIGN3_3
         
         attn = self.dropout(attn)
